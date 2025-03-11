@@ -288,22 +288,21 @@ async function main(){
     shadowProgram.a_Position = gl.getAttribLocation(shadowProgram, 'a_Position');
     shadowProgram.u_MvpMatrix = gl.getUniformLocation(shadowProgram, 'u_MvpMatrix');
 
-    sphereObj = await loadOBJtoCreateVBO('sphere.obj');
-    sonicObj = await loadOBJtoCreateVBO('sonic.obj');
-    marioObj = await loadOBJtoCreateVBO('mario.obj');
-    cubeObj = await loadOBJtoCreateVBO('cube.obj');
-    garageObj = await loadOBJtoCreateVBO('garage.obj');
-    // quadObj = await loadOBJtoCreateVBO('quad.obj');
-    pumpkinObj = await loadOBJtoCreateVBO('pumpkin.obj');
-    plantObj = await loadOBJtoCreateVBO('plant.obj');
-    leafObj = await loadOBJtoCreateVBO('leaf.obj');
-    toolsObj = await loadOBJtoCreateVBO('tools.obj');
-    farmerObj = await loadOBJtoCreateVBO('workermanOBJ.obj');
-    bagObj = await loadOBJtoCreateVBO('Barrier.obj');
-    canObj = await loadOBJtoCreateVBO('wateringCan.obj');
-    wellObj = await loadOBJtoCreateVBO('Well.obj');
-    cartObj = await loadOBJtoCreateVBO('Cart.obj');
-    bagonhandObj = await loadOBJtoCreateVBO('hanging_package.obj');
+    sphereObj = await loadOBJtoCreateVBO('objects/sphere.obj');
+    sonicObj = await loadOBJtoCreateVBO('objects/sonic.obj');
+    marioObj = await loadOBJtoCreateVBO('objects/mario.obj');
+    cubeObj = await loadOBJtoCreateVBO('objects/cube.obj');
+    garageObj = await loadOBJtoCreateVBO('objects/garage.obj');
+    pumpkinObj = await loadOBJtoCreateVBO('objects/pumpkin.obj');
+    plantObj = await loadOBJtoCreateVBO('objects/plant.obj');
+    leafObj = await loadOBJtoCreateVBO('objects/leaf.obj');
+    toolsObj = await loadOBJtoCreateVBO('objects/tools.obj');
+    farmerObj = await loadOBJtoCreateVBO('objects/workermanOBJ.obj');
+    bagObj = await loadOBJtoCreateVBO('objects/Barrier.obj');
+    canObj = await loadOBJtoCreateVBO('objects/wateringCan.obj');
+    wellObj = await loadOBJtoCreateVBO('objects/Well.obj');
+    cartObj = await loadOBJtoCreateVBO('objects/Cart.obj');
+    bagonhandObj = await loadOBJtoCreateVBO('objects/hanging_package.obj');
 
     program = compileShader(gl, VSHADER_SOURCE, FSHADER_SOURCE);
     program.a_Position = gl.getAttribLocation(program, 'a_Position'); 
@@ -348,63 +347,63 @@ async function main(){
     //
     let imageSteel = new Image();
     imageSteel.onload = function(){initTexture(gl, imageSteel, "steelTex");};
-    imageSteel.src = "steel.jpg";
+    imageSteel.src = "texure/steel.jpg";
     //
     let imageWood = new Image();
     imageWood.onload = function(){initTexture(gl, imageWood,"woodTex");};
-    imageWood.src = "wood.jpg"
+    imageWood.src = "texure/wood.jpg"
     //
     let imageTrack = new Image();
     imageTrack.onload = function(){initTexture(gl, imageTrack,"trackTex");};
-    imageTrack.src = "track.jpg"    
+    imageTrack.src = "texure/track.jpg"    
     //
     let imageField = new Image();
     imageField.onload = function(){initTexture(gl, imageField,"fieldTex");};
-    imageField.src = "field.jpg"        
+    imageField.src = "texure/field.jpg"        
     //
     let imageSoil = new Image();
     imageSoil.onload = function(){initTexture(gl, imageSoil,"soilTex");};
-    imageSoil.src = "soil.jpg"         
+    imageSoil.src = "texure/soil.jpg"         
     //
     let imageBag = new Image();
     imageBag.onload = function(){initTexture(gl, imageBag,"bagTex");};
-    imageBag.src = "bag.jpg"         
+    imageBag.src = "texure/bag.jpg"         
     //
     let imagePumpkin = new Image();
     imagePumpkin.onload = function(){initTexture(gl, imagePumpkin,"pumpkinTex");};
-    imagePumpkin.src = "pumpkin.jpg"      
+    imagePumpkin.src = "texure/pumpkin.jpg"      
     //
     let imagePlant = new Image();
     imagePlant.onload = function(){initTexture(gl, imagePlant,"plantTex");};
-    imagePlant.src = "plant.jpg"      
+    imagePlant.src = "texure/plant.jpg"      
     //
     let imageLeaf = new Image();
     imageLeaf.onload = function(){initTexture(gl, imageLeaf,"leafTex");};
-    imageLeaf.src = "leaf.jpg"         
+    imageLeaf.src = "texure/leaf.jpg"         
     //
     let imageCan = new Image();
     imageCan.onload = function(){initTexture(gl, imageCan,"canTex");};
-    imageCan.src = "can.png"          
+    imageCan.src = "texure/can.png"          
     //
     let imageRock = new Image();
     imageRock.onload = function(){initTexture(gl, imageRock,"rockTex");};
-    imageRock.src = "rock.jpg"           
+    imageRock.src = "texure/rock.jpg"           
     //
     let imageFertilizer = new Image();
     imageFertilizer.onload = function(){initTexture(gl, imageFertilizer,"fertTex");};
-    imageFertilizer.src = "fert.jpg"        
+    imageFertilizer.src = "texure/fert.jpg"        
     //
     let imageSkin = new Image();
     imageSkin.onload = function(){initTexture(gl, imageSkin,"skinTex");};
-    imageSkin.src = "skin.jpg"           
+    imageSkin.src = "texure/skin.jpg"           
     //
     let imageSkin2 = new Image();
     imageSkin2.onload = function(){initTexture(gl, imageSkin2,"skin2Tex");};
-    imageSkin2.src = "skin_dark.jpg"  
+    imageSkin2.src = "texure/skin_dark.jpg"  
     //
 
-    cubeMapTex = initCubeTexture("pos-x.jpg", "neg-x.jpg", "pos-y.jpg", "neg-y.jpg", 
-                                      "pos-z.jpg", "neg-z.jpg", 2048, 2048)
+    cubeMapTex = initCubeTexture("cubeMapTexure/pos-x.jpg", "cubeMapTexure/neg-x.jpg", "cubeMapTexure/pos-y.jpg", "cubeMapTexure/neg-y.jpg", 
+                                      "cubeMapTexure/pos-z.jpg", "cubeMapTexure/neg-z.jpg", 2048, 2048)
 
     var quad = new Float32Array(
       [
