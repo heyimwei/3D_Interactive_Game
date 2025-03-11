@@ -8,9 +8,9 @@
 
 ## 1. 專案簡介
 
-![alt text](Screenshot.png)
+![alt text](screenshot.png)
 
-![alt text](Screenshot2.png)
+![alt text](screenshot2.png)
 
 - **主要功能**：  
   1. 角色可拿取種子、肥料、水壺等物品並在田地進行播種、澆水、施肥。  
