@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>HAPPY PUMPKIN FARM</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                margin: 20px;
+            }
+            h1 {
+                text-align: left;
+            }
+            ul {
+                list-style-type: none;
+                padding: 0;
+            }
+            li {
+                margin: 10px 0;
+            }
+            .section-title {
+                font-weight: bold;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+
+    <body onload="main()">
+        <canvas id="webgl" width = "800" height = "800">
+            Please use a browser that support "canvas"
+        </canvas>
+
+        <!-- 文字顯示區域 -->
+        <div id="status"></div>
+        <h1>南瓜農場遊戲控制介紹</h1>
+
+        <p>在這個農場遊戲中，玩家可以透過以下的控制鍵來操控角色並進行各種互動：</p>
+        <p>透過這些簡單的控制，你可以在農場中自由活動，抓取並放置物品，與各種農場設施互動，並且隨時切換視角來獲得最佳的遊戲體驗。享受你的農場生活吧！</p>
+        <p>遊戲流程:1.拿起種子放到田裡 2.拿起水壺 打水 澆水 3.拿起肥料 施肥 4.收成南瓜 5.放到收獲車上 6.累積收穫兩顆南瓜，按Q鍵推走車子，快樂賺錢~</p>
+        
+        <div class="section-title">角色移動</div>
+        <ul>
+            <li><strong>W</strong>：向前移動</li>
+            <li><strong>S</strong>：向後移動</li>
+            <li><strong>A</strong>：向左移動</li>
+            <li><strong>D</strong>：向右移動</li>
+        </ul>
+        
+        <div class="section-title">互動與操作</div>
+        <ul>
+            <li><strong>G</strong>：抓取物品</li>
+            <li><strong>H</strong>：放下物品</li>
+            <li><strong>E</strong>：對物品進行互動</li>
+        </ul>
+        
+        <div class="section-title">視角切換</div>
+        <ul>
+            <li><strong>Z</strong>：切換到第三人稱視角</li>
+            <li><strong>X</strong>：切換到第一人稱視角</li>
+        </ul>
+    
+    
+
+        <script src="cuon-matrix.js"></script>
+        <script src="WebGLtest.js"></script>
+    </body>
+</html>
+
+
