@@ -1,15 +1,22 @@
 var VSHADER_SOURCE = `
     attribute vec4 a_Position;
     attribute vec4 a_Normal;
+    attribute vec2 a_TexCoord;
     uniform mat4 u_MvpMatrix;
     uniform mat4 u_modelMatrix;
     uniform mat4 u_normalMatrix;
+    uniform mat4 u_ProjMatrixFromLight;
+    uniform mat4 u_MvpMatrixOfLight;
+    varying vec4 v_PositionFromLight;
     varying vec3 v_Normal;
     varying vec3 v_PositionInWorld;
+    varying vec2 v_TexCoord;
     void main(){
         gl_Position = u_MvpMatrix * a_Position;
         v_PositionInWorld = (u_modelMatrix * a_Position).xyz; 
         v_Normal = normalize(vec3(u_normalMatrix * a_Normal));
+        v_PositionFromLight = u_MvpMatrixOfLight * a_Position; //for shadow
+        v_TexCoord = a_TexCoord;
     }    
 `;
 
@@ -20,15 +27,20 @@ var FSHADER_SOURCE = `
     uniform float u_Ka;
     uniform float u_Kd;
     uniform float u_Ks;
-    uniform vec3 u_Color;
     uniform float u_shininess;
+    uniform vec3 u_Color;
+    uniform sampler2D u_ShadowMap;
+    uniform sampler2D u_Sampler0;
+    uniform sampler2D u_Sampler1;
     varying vec3 v_Normal;
     varying vec3 v_PositionInWorld;
-    void main(){
-        // (you can also input them from ouside and make them different)
-        vec3 ambientLightColor = u_Color.rgb;
-        vec3 diffuseLightColor = u_Color.rgb;
-        // assume white specular light (you can also input it from ouside)
+    varying vec2 v_TexCoord;
+    varying vec4 v_PositionFromLight;
+    const float deMachThreshold = 0.005; //0.001 if having high precision depth
+    void main(){ 
+        vec3 texColor = texture2D( u_Sampler0, v_TexCoord ).rgb;
+        vec3 ambientLightColor = texColor;
+        vec3 diffuseLightColor = texColor;
         vec3 specularLightColor = vec3(1.0, 1.0, 1.0);        
 
         vec3 ambient = ambientLightColor * u_Ka;
@@ -47,9 +59,33 @@ var FSHADER_SOURCE = `
             specular = u_Ks * pow(specAngle, u_shininess) * specularLightColor; 
         }
 
-        gl_FragColor = vec4( ambient + diffuse + specular, 1.0 );
+        //***** shadow
+        vec3 shadowCoord = (v_PositionFromLight.xyz/v_PositionFromLight.w)/2.0 + 0.5;
+        vec4 rgbaDepth = texture2D(u_ShadowMap, shadowCoord.xy);
+        /////////******** LOW precision depth implementation ********///////////
+        float depth = rgbaDepth.r;
+        float visibility = (shadowCoord.z > depth + deMachThreshold) ? 0.3 : 1.0;
+
+        gl_FragColor = vec4( (ambient + diffuse + specular)*visibility, 1.0);
+        
     }
 `;
+
+var VSHADER_SHADOW_SOURCE = `
+      attribute vec4 a_Position;
+      uniform mat4 u_MvpMatrix;
+      void main(){
+          gl_Position = u_MvpMatrix * a_Position;
+      }
+  `;
+
+var FSHADER_SHADOW_SOURCE = `
+      precision mediump float;
+      void main(){
+        /////////** LOW precision depth implementation **/////
+        gl_FragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
+      }
+  `;
 
 var VSHADER_SOURCE_TEXTURE_ON_CUBE = `
   attribute vec4 a_Position;
@@ -191,18 +227,53 @@ var mouseDragging = false;
 var angleX = 0, angleY = 0;
 var gl, canvas;
 var modelMatrix;
+var normalMatrix;
 var nVertex;
-var cameraX = 0, cameraY = 1, cameraZ = 7;
+var cameraX = 0, cameraY = 2, cameraZ = 7;
 var cameraDirX = 0, cameraDirY = 0, cameraDirZ = -1;
-var lightX = 5, lightY = 1, lightZ = 7;
+var lookmode = 1;
+var lightX = 0, lightY = 15, lightZ = 1;
 var cubeMapTex;
+var cubeObj;
 var quadObj;
 var sphereObj;
 var marioObj;
 var sonicObj;
+var garageObj;
+var pumpkinObj;
+var plantObj;
+var leafObj;
+var toolsObj;
+var farmerObj;
+var bagObj;
+var canObj;
+var wellObj;
+var cartObj;
+var bagonhandObj;
 var rotateAngle = 0;
+var texCount = 0;
 var fbo;
+var textures = {};
+var numTextures = 1; 
 var offScreenWidth = 256, offScreenHeight = 256; //for cubemap render
+var can_on_hand = 0;
+var seed_on_hand = 0;
+var fert_on_hand = 0;
+var plant_on_hand = 0;
+var distance_can = 20;
+var distance_seed = 20;
+var distance_fert = 20;
+var distance_plant = 20;
+var distance_well = 20;
+var distance_cart = 20;
+var plant_level = 0;
+var water_filled = 0;
+var money = 0;
+var end = 0;
+var cart_angle = -15;
+var cart_angle2 = 0;
+var Cart_x = 8;
+var Cart_z = 10;
 
 async function main(){
     canvas = document.getElementById('webgl');
@@ -212,24 +283,45 @@ async function main(){
         return ;
     }
 
+    //setup shaders and prepare shader variables
+    shadowProgram = compileShader(gl, VSHADER_SHADOW_SOURCE, FSHADER_SHADOW_SOURCE);
+    shadowProgram.a_Position = gl.getAttribLocation(shadowProgram, 'a_Position');
+    shadowProgram.u_MvpMatrix = gl.getUniformLocation(shadowProgram, 'u_MvpMatrix');
+
     sphereObj = await loadOBJtoCreateVBO('sphere.obj');
     sonicObj = await loadOBJtoCreateVBO('sonic.obj');
     marioObj = await loadOBJtoCreateVBO('mario.obj');
+    cubeObj = await loadOBJtoCreateVBO('cube.obj');
+    garageObj = await loadOBJtoCreateVBO('garage.obj');
     // quadObj = await loadOBJtoCreateVBO('quad.obj');
+    pumpkinObj = await loadOBJtoCreateVBO('pumpkin.obj');
+    plantObj = await loadOBJtoCreateVBO('plant.obj');
+    leafObj = await loadOBJtoCreateVBO('leaf.obj');
+    toolsObj = await loadOBJtoCreateVBO('tools.obj');
+    farmerObj = await loadOBJtoCreateVBO('workermanOBJ.obj');
+    bagObj = await loadOBJtoCreateVBO('Barrier.obj');
+    canObj = await loadOBJtoCreateVBO('wateringCan.obj');
+    wellObj = await loadOBJtoCreateVBO('Well.obj');
+    cartObj = await loadOBJtoCreateVBO('Cart.obj');
+    bagonhandObj = await loadOBJtoCreateVBO('hanging_package.obj');
 
     program = compileShader(gl, VSHADER_SOURCE, FSHADER_SOURCE);
     program.a_Position = gl.getAttribLocation(program, 'a_Position'); 
     program.a_Normal = gl.getAttribLocation(program, 'a_Normal'); 
+    program.a_TexCoord = gl.getAttribLocation(program, 'a_TexCoord'); 
     program.u_MvpMatrix = gl.getUniformLocation(program, 'u_MvpMatrix'); 
     program.u_modelMatrix = gl.getUniformLocation(program, 'u_modelMatrix'); 
     program.u_normalMatrix = gl.getUniformLocation(program, 'u_normalMatrix');
     program.u_LightPosition = gl.getUniformLocation(program, 'u_LightPosition');
     program.u_ViewPosition = gl.getUniformLocation(program, 'u_ViewPosition');
+    program.u_MvpMatrixOfLight = gl.getUniformLocation(program, 'u_MvpMatrixOfLight');
     program.u_Ka = gl.getUniformLocation(program, 'u_Ka'); 
     program.u_Kd = gl.getUniformLocation(program, 'u_Kd');
     program.u_Ks = gl.getUniformLocation(program, 'u_Ks');
     program.u_Color = gl.getUniformLocation(program, 'u_Color');
     program.u_shininess = gl.getUniformLocation(program, 'u_shininess');
+    program.u_Sampler0 = gl.getUniformLocation(program, "u_Sampler0");
+    program.u_ShadowMap = gl.getUniformLocation(program, "u_ShadowMap");
 
     programTextureOnCube = compileShader(gl, VSHADER_SOURCE_TEXTURE_ON_CUBE, FSHADER_SOURCE_TEXTURE_ON_CUBE);
     programTextureOnCube.a_Position = gl.getAttribLocation(programTextureOnCube, 'a_Position'); 
@@ -240,14 +332,79 @@ async function main(){
     programTextureOnCube.u_ViewPosition = gl.getUniformLocation(programTextureOnCube, 'u_ViewPosition');
     programTextureOnCube.u_envCubeMap = gl.getUniformLocation(programTextureOnCube, 'u_envCubeMap'); 
     programTextureOnCube.u_Color = gl.getUniformLocation(programTextureOnCube, 'u_Color'); 
+
+    // gl.useProgram(program);
+
+    fbo = initFrameBuffer(gl);
+
+    // draw();
     
     programEnvCube = compileShader(gl, VSHADER_SOURCE_ENVCUBE, FSHADER_SOURCE_ENVCUBE);
     programEnvCube.a_Position = gl.getAttribLocation(programEnvCube, 'a_Position'); 
     programEnvCube.u_envCubeMap = gl.getUniformLocation(programEnvCube, 'u_envCubeMap'); 
     programEnvCube.u_viewDirectionProjectionInverse = gl.getUniformLocation(programEnvCube, 'u_viewDirectionProjectionInverse');
     
+
+    //
+    let imageSteel = new Image();
+    imageSteel.onload = function(){initTexture(gl, imageSteel, "steelTex");};
+    imageSteel.src = "steel.jpg";
+    //
+    let imageWood = new Image();
+    imageWood.onload = function(){initTexture(gl, imageWood,"woodTex");};
+    imageWood.src = "wood.jpg"
+    //
+    let imageTrack = new Image();
+    imageTrack.onload = function(){initTexture(gl, imageTrack,"trackTex");};
+    imageTrack.src = "track.jpg"    
+    //
+    let imageField = new Image();
+    imageField.onload = function(){initTexture(gl, imageField,"fieldTex");};
+    imageField.src = "field.jpg"        
+    //
+    let imageSoil = new Image();
+    imageSoil.onload = function(){initTexture(gl, imageSoil,"soilTex");};
+    imageSoil.src = "soil.jpg"         
+    //
+    let imageBag = new Image();
+    imageBag.onload = function(){initTexture(gl, imageBag,"bagTex");};
+    imageBag.src = "bag.jpg"         
+    //
+    let imagePumpkin = new Image();
+    imagePumpkin.onload = function(){initTexture(gl, imagePumpkin,"pumpkinTex");};
+    imagePumpkin.src = "pumpkin.jpg"      
+    //
+    let imagePlant = new Image();
+    imagePlant.onload = function(){initTexture(gl, imagePlant,"plantTex");};
+    imagePlant.src = "plant.jpg"      
+    //
+    let imageLeaf = new Image();
+    imageLeaf.onload = function(){initTexture(gl, imageLeaf,"leafTex");};
+    imageLeaf.src = "leaf.jpg"         
+    //
+    let imageCan = new Image();
+    imageCan.onload = function(){initTexture(gl, imageCan,"canTex");};
+    imageCan.src = "can.png"          
+    //
+    let imageRock = new Image();
+    imageRock.onload = function(){initTexture(gl, imageRock,"rockTex");};
+    imageRock.src = "rock.jpg"           
+    //
+    let imageFertilizer = new Image();
+    imageFertilizer.onload = function(){initTexture(gl, imageFertilizer,"fertTex");};
+    imageFertilizer.src = "fert.jpg"        
+    //
+    let imageSkin = new Image();
+    imageSkin.onload = function(){initTexture(gl, imageSkin,"skinTex");};
+    imageSkin.src = "skin.jpg"           
+    //
+    let imageSkin2 = new Image();
+    imageSkin2.onload = function(){initTexture(gl, imageSkin2,"skin2Tex");};
+    imageSkin2.src = "skin_dark.jpg"  
+    //
+
     cubeMapTex = initCubeTexture("pos-x.jpg", "neg-x.jpg", "pos-y.jpg", "neg-y.jpg", 
-                                      "pos-z.jpg", "neg-z.jpg", 512, 512)
+                                      "pos-z.jpg", "neg-z.jpg", 2048, 2048)
 
     var quad = new Float32Array(
       [
@@ -261,7 +418,7 @@ async function main(){
 
     quadObj = initVertexBufferForLaterUse(gl, quad);
 
-    fbo = initFrameBufferForCubemapRendering(gl);
+    fbo2 = initFrameBufferForCubemapRendering(gl);
 
     canvas.onmousedown = function(ev){mouseDown(ev)};
     canvas.onmousemove = function(ev){mouseMove(ev)};
@@ -269,43 +426,443 @@ async function main(){
     document.onkeydown = function(ev){keydown(ev)};
 
     var tick = function() {
-      rotateAngle += 0.45;
+      // rotateAngle += 0.45;
       draw();
       requestAnimationFrame(tick);
+      
+      const status = document.getElementById('status');
+      console.log(status.textContent);
+      status.textContent = "收成 :" + money;
+      if(money == 2){
+        status.textContent = "收穫滿滿! 按 Q 賣出南瓜";
+      }
+      if(end == 1 && cart_angle < 0){
+        cart_angle += 0.1;
+      }
+      if(cart_angle >= 0 && cart_angle2 != 90){
+        cart_angle2 += 1;
+      }
+      if(cart_angle2 == 90 && Cart_x <= 20){
+        Cart_x += 0.1;
+      }
+      if(Cart_x >= 20){
+        status.textContent = "成功! 遊戲結束~";
+      }
     }
     tick();
+
 }
 
 var vpFromCameraInverse = new Matrix4();
 
 function draw(){
-  renderCubeMap(0, 0, 0);
+  ///// off screen shadow
+  gl.useProgram(shadowProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.viewport(0, 0, offScreenWidth, offScreenHeight);
+  gl.clearColor(0.0, 0.0, 0.0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
 
+  //cube
+  let cubeMdlMatrix = new Matrix4();
+  cubeMdlMatrix.setTranslate(0.0, 0.0, 0.0);
+  cubeMdlMatrix.scale(20, 0.2, 20);
+  let cubeMvpFromLight = drawOffScreen(cubeObj, cubeMdlMatrix);
+  //cube2
+  let cube2MdlMatrix = new Matrix4();
+  cube2MdlMatrix.setTranslate(0.0, 0.0, 0.0);
+  cube2MdlMatrix.scale(0.2, 3, 0.2);
+  let cube2MvpFromLight = drawOffScreen(cubeObj, cube2MdlMatrix);
+  //soil
+  let soilMdlMatrix = new Matrix4();
+  soilMdlMatrix.setTranslate(-5.0, 0.2, -5.0);
+  soilMdlMatrix.scale(3, 0.1, 3);
+  let soilMvpFromLight = drawOffScreen(cubeObj, soilMdlMatrix);
+  //soil2
+  let soil2MdlMatrix = new Matrix4();
+  soil2MdlMatrix.setTranslate(-13.0, 0.2, -5.0);
+  soil2MdlMatrix.scale(3, 0.1, 3);
+  let soil2MvpFromLight = drawOffScreen(cubeObj, soil2MdlMatrix);
+  //soil3
+  let soil3MdlMatrix = new Matrix4();
+  soil3MdlMatrix.setTranslate(-5.0, 0.2, -13.0);
+  soil3MdlMatrix.scale(3, 0.1, 3);
+  let soil3MvpFromLight = drawOffScreen(cubeObj, soil3MdlMatrix);
+  //soil4
+  let soil4MdlMatrix = new Matrix4();
+  soil4MdlMatrix.setTranslate(-13.0, 0.2, -13.0);
+  soil4MdlMatrix.scale(3, 0.1, 3);
+  let soil4MvpFromLight = drawOffScreen(cubeObj, soil4MdlMatrix);
+  //road
+  let roadMdlMatrix = new Matrix4();
+  roadMdlMatrix.setTranslate(0.0, 0.11, 16.0);
+  roadMdlMatrix.scale(20, 0.1, 4);
+  let roadMvpFromLight = drawOffScreen(cubeObj, roadMdlMatrix);
+  //road2
+  let road2MdlMatrix = new Matrix4();
+  road2MdlMatrix.setTranslate(0.0, 0.11, 8.0);
+  road2MdlMatrix.scale(2.5, 0.1, 4);
+  let road2MvpFromLight = drawOffScreen(cubeObj, road2MdlMatrix);
+  //mario
+  let marioMdlMatrix = new Matrix4();
+  marioMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  marioMdlMatrix.translate(4, 2.4, -7.5);
+  marioMdlMatrix.scale(1.8, 1.5, 1.8);
+  let marioMvpFromLight = drawOffScreen(farmerObj, marioMdlMatrix);
+  //sonic
+  let sonicMdlMatrix = new Matrix4();
+  sonicMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  sonicMdlMatrix.translate(0.0, 1.7, -7.5);
+  sonicMdlMatrix.scale(2.0, 1.0,2.0);
+  let sonicMvpFromLight = drawOffScreen(farmerObj, sonicMdlMatrix);
+  //garage
+  let garageMdlMatrix = new Matrix4();
+  garageMdlMatrix.setTranslate(12.0, 0.0, -7.0);
+  garageMdlMatrix.rotate(rotateAngle-90, 0, 1, 0);
+  garageMdlMatrix.scale(1.2, 0.9,1.2);
+  let garageMvpFromLight = drawOffScreen(garageObj, garageMdlMatrix);
+
+
+  //farmer
+  let farmerMdlMatrix = new Matrix4();
+  if(lookmode == 1){
+    farmerMdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+  }else{
+    farmerMdlMatrix.setTranslate(cameraX, cameraY-3, cameraZ);
+  }
+  // console.log("farmer",farmerMdlMatrix.elements[12],farmerMdlMatrix.elements[13],farmerMdlMatrix.elements[14]);
+  farmerMdlMatrix.rotate(180, 0, 1, 0);
+  farmerMdlMatrix.rotate(angleX, 0, 1, 0);//for mouse rotation
+  farmerMdlMatrix.scale(1.8, 1.2, 1.8);
+  let farmerMvpFromLight = drawOffScreen(farmerObj, farmerMdlMatrix);
+
+  //can on hand
+  let canonhandMdlMatrix;
+  let canonhandMvpFromLight;
+  if(can_on_hand==1){
+    canonhandMdlMatrix = new Matrix4();
+    canonhandMdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    canonhandMdlMatrix.translate(0.4, -0.5, -1.0);
+    canonhandMdlMatrix.rotate(-90, 0, 1, 0);
+    canonhandMdlMatrix.scale(0.0015, 0.001,0.0015);
+    canonhandMvpFromLight = drawOffScreen(canObj, canonhandMdlMatrix);
+  }
+  //seed on hand seedonhand
+  let seedonhandMdlMatrix;
+  let seedonhandMvpFromLight;
+  if(seed_on_hand==1){
+    seedonhandMdlMatrix = new Matrix4();
+    seedonhandMdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    seedonhandMdlMatrix.translate(0.2, -0.5, -0.8);
+    seedonhandMdlMatrix.rotate(-90, 0, 1, 0);
+    seedonhandMdlMatrix.rotate(-90, 1, 0, 0);
+    seedonhandMdlMatrix.scale(0.02, 0.02,0.02);
+    seedonhandMvpFromLight = drawOffScreen(bagonhandObj, seedonhandMdlMatrix);
+  }
+  //fert on hand fertonhand
+  let fertonhandMdlMatrix;
+  let fertonhandMvpFromLight;
+  if(fert_on_hand==1){
+    fertonhandMdlMatrix = new Matrix4();
+    fertonhandMdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    fertonhandMdlMatrix.translate(0.2, -0.5, -0.8);
+    fertonhandMdlMatrix.rotate(-90, 0, 1, 0);
+    fertonhandMdlMatrix.rotate(-90, 1, 0, 0);
+    fertonhandMdlMatrix.scale(0.02, 0.02,0.02);
+    fertonhandMvpFromLight = drawOffScreen(bagonhandObj, fertonhandMdlMatrix);
+  }
+  //plant on hand plantonhand
+  let plantonhandMdlMatrix;
+  let plantonhandMvpFromLight;
+  if(plant_on_hand==1){
+    plantonhandMdlMatrix = new Matrix4();
+    plantonhandMdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    plantonhandMdlMatrix.translate(0.45, -0.8, -1.0);
+    plantonhandMdlMatrix.rotate(0, 0, 1, 0);
+    plantonhandMdlMatrix.scale(0.15, 0.15, 0.15);
+    plantonhandMvpFromLight = drawOffScreen(pumpkinObj, plantonhandMdlMatrix);
+  }
+  
+
+
+  //tools
+  let toolsMdlMatrix = new Matrix4();
+  toolsMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  toolsMdlMatrix.translate(13, 0.0, -7);
+  toolsMdlMatrix.scale(0.2, 0.2,0.2);
+  let toolsMvpFromLight = drawOffScreen(toolsObj, toolsMdlMatrix);
+  //bag
+  let bagMdlMatrix = new Matrix4();
+  bagMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  bagMdlMatrix.translate(4.0, 0.3, -6);
+  bagMdlMatrix.scale(1, 1,1);
+  let bagMvpFromLight = drawOffScreen(bagObj, bagMdlMatrix);
+  //fertilizer
+  let fertMdlMatrix = new Matrix4();
+  fertMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  fertMdlMatrix.translate(0.0, 0.3, -6);
+  fertMdlMatrix.scale(1, 1,1);
+  let fertMvpFromLight = drawOffScreen(bagObj, fertMdlMatrix);
+  //can
+  let canMdlMatrix = new Matrix4();
+  canMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  canMdlMatrix.translate(15, 0.5, -5);
+  // console.log("can",canMdlMatrix.elements[12],canMdlMatrix.elements[13],canMdlMatrix.elements[14]);
+  canMdlMatrix.scale(0.0015, 0.001,0.0015);
+  let canMvpFromLight = drawOffScreen(canObj, canMdlMatrix);
+  //well
+  let wellMdlMatrix = new Matrix4();
+  wellMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  wellMdlMatrix.translate(-6, 0.3, 6);
+  wellMdlMatrix.scale(1, 1,1);
+  let wellMvpFromLight = drawOffScreen(wellObj, wellMdlMatrix);
+
+  //plant
+  //3
+  let pumpkinMdlMatrix = new Matrix4();
+  pumpkinMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  pumpkinMdlMatrix.translate(-4.9, 0.3, -4.9);
+  pumpkinMdlMatrix.scale(0.2, 0.2, 0.2);
+  let pumpkinMvpFromLight;
+  //2
+  let plantMdlMatrix = new Matrix4();
+  plantMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  plantMdlMatrix.translate(-5.1, 0.3, -5.1);
+  plantMdlMatrix.scale(0.25, 0.25, 0.25);
+  let plantMvpFromLight;
+  //1
+  let leafMdlMatrix = new Matrix4();
+  leafMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  leafMdlMatrix.translate(-5.0, 0.3, -5);
+  leafMdlMatrix.scale(0.005, 0.005, 0.005);
+  let leafMvpFromLight;
+  if(plant_level == 0){
+
+  }else if(plant_level == 1){
+    //1
+    leafMvpFromLight = drawOffScreen(plantObj, leafMdlMatrix);
+  }else if(plant_level == 2){
+    //2
+    plantMvpFromLight = drawOffScreen(plantObj, plantMdlMatrix);
+  }else if(plant_level == 3){
+    //pumpkin
+    pumpkinMvpFromLight = drawOffScreen(pumpkinObj, pumpkinMdlMatrix);
+  }
+
+  
+  //cart
+  let cartMdlMatrix = new Matrix4();
+  cartMdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  cartMdlMatrix.translate(Cart_x, 1.1, Cart_z);
+  cartMdlMatrix.rotate(cart_angle2, 0, 1, 0);
+  cartMdlMatrix.rotate(cart_angle, 1, 0, 0);
+  cartMdlMatrix.scale(0.03, 0.03,0.03);
+  let cartMvpFromLight = drawOffScreen(cartObj, cartMdlMatrix);
+
+  //pumpkin2
+  let pumpkinMdlMatrix2 = new Matrix4();
+  pumpkinMdlMatrix2.setRotate(rotateAngle, 0, 1, 0);
+  pumpkinMdlMatrix2.translate(Cart_x, 1.6, Cart_z);
+  pumpkinMdlMatrix2.rotate(cart_angle2, 0, 1, 0);
+  pumpkinMdlMatrix2.rotate(cart_angle, 1, 0, 0);
+  pumpkinMdlMatrix2.scale(0.2, 0.2, 0.2);
+  let pumpkinMvpFromLight2;
+  if(money >= 1){
+    pumpkinMvpFromLight2 = drawOffScreen(pumpkinObj, pumpkinMdlMatrix2);
+  }
+
+  //pumpkin3
+  let pumpkinMdlMatrix3 = new Matrix4();
+  pumpkinMdlMatrix3.setRotate(rotateAngle, 0, 1, 0);
+  pumpkinMdlMatrix3.translate(Cart_x, 1.7, Cart_z+1);
+  pumpkinMdlMatrix3.rotate(cart_angle2, 0, 1, 0);
+  pumpkinMdlMatrix3.rotate(cart_angle, 1, 0, 0);
+  pumpkinMdlMatrix3.scale(0.2, 0.2, 0.2);
+  let pumpkinMvpFromLight3;
+  if(money == 2){
+    pumpkinMvpFromLight3 = drawOffScreen(pumpkinObj, pumpkinMdlMatrix3);
+  }
+
+
+
+  var farmer_x = farmerMdlMatrix.elements[12];
+  var farmer_y = farmerMdlMatrix.elements[13]-1.5;
+  var farmer_z = farmerMdlMatrix.elements[14];
+  
+  var can_x = canMdlMatrix.elements[12];
+  var can_y = canMdlMatrix.elements[13];
+  var can_z = canMdlMatrix.elements[14];
+  
+  var dx = can_x - farmer_x;
+  var dy = can_y - farmer_y;
+  var dz = can_z - farmer_z;
+  distance_can = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance can:",distance_can);
+  
+  var seed_x = bagMdlMatrix.elements[12];
+  var seed_y = bagMdlMatrix.elements[13];
+  var seed_z = bagMdlMatrix.elements[14];
+
+  dx = seed_x - farmer_x;
+  dy = seed_y - farmer_y;
+  dz = seed_z - farmer_z;
+  distance_seed = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance seed:",distance_seed);
+  
+  var fert_x = fertMdlMatrix.elements[12];
+  var fert_y = fertMdlMatrix.elements[13];
+  var fert_z = fertMdlMatrix.elements[14];
+
+  dx = fert_x - farmer_x;
+  dy = fert_y - farmer_y;
+  dz = fert_z - farmer_z;
+  distance_fert = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance fert:",distance_fert);
+  
+  var plant_x = pumpkinMdlMatrix.elements[12];
+  var plant_y = pumpkinMdlMatrix.elements[13];
+  var plant_z = pumpkinMdlMatrix.elements[14];
+
+  dx = plant_x - farmer_x;
+  dy = plant_y - farmer_y;
+  dz = plant_z - farmer_z;
+  distance_plant = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance plant:",distance_plant);
+  
+  var well_x = wellMdlMatrix.elements[12];
+  var well_y = wellMdlMatrix.elements[13];
+  var well_z = wellMdlMatrix.elements[14];
+
+  dx = well_x - farmer_x;
+  dy = well_y - farmer_y;
+  dz = well_z - farmer_z;
+  distance_well = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance well:",distance_well);
+  
+  var cart_x = cartMdlMatrix.elements[12];
+  var cart_y = cartMdlMatrix.elements[13];
+  var cart_z = cartMdlMatrix.elements[14];
+
+  dx = cart_x - farmer_x;
+  dy = cart_y - farmer_y;
+  dz = cart_z - farmer_z;
+  distance_cart = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  console.log("distance cart:",distance_cart);
+  
+
+
+  ///// on screen rendering
+  gl.useProgram(program);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0.4,0.4,0.4,1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);
+  //cube
+  drawOneObjectOnScreen(cubeObj, cubeMdlMatrix,cubeMvpFromLight, "fieldTex");
+  //cube2
+  drawOneObjectOnScreen(cubeObj, cube2MdlMatrix,cube2MvpFromLight, "steelTex");
+  //soil
+  drawOneObjectOnScreen(cubeObj, soilMdlMatrix,soilMvpFromLight, "soilTex");
+  //soil2
+  drawOneObjectOnScreen(cubeObj, soil2MdlMatrix,soil2MvpFromLight, "soilTex");
+  //soil3
+  drawOneObjectOnScreen(cubeObj, soil3MdlMatrix,soil3MvpFromLight, "soilTex");
+  //soil4
+  drawOneObjectOnScreen(cubeObj, soil4MdlMatrix,soil4MvpFromLight, "soilTex");
+  //road
+  drawOneObjectOnScreen(cubeObj, roadMdlMatrix,roadMvpFromLight, "rockTex");
+  //road2
+  drawOneObjectOnScreen(cubeObj, road2MdlMatrix,road2MvpFromLight, "rockTex");
+  //mario
+  drawOneObjectOnScreen(farmerObj, marioMdlMatrix,marioMvpFromLight, "skin2Tex");
+  //sonic
+  drawOneObjectOnScreen(farmerObj, sonicMdlMatrix,sonicMvpFromLight, "skinTex");
+  //garage
+  drawOneObjectOnScreen(garageObj, garageMdlMatrix,garageMvpFromLight, "woodTex");
+  //farmer
+  drawOneObjectOnScreen(farmerObj, farmerMdlMatrix,farmerMvpFromLight, "woodTex");
+  
+  //can on hand
+  if(can_on_hand == 1){
+    drawOneObjectOnScreen(canObj, canonhandMdlMatrix,canonhandMvpFromLight, "canTex");
+  }
+  //seed on hand
+  if(seed_on_hand == 1){
+    drawOneObjectOnScreen(bagonhandObj, seedonhandMdlMatrix,seedonhandMvpFromLight, "bagTex");
+  }
+  //fert on hand
+  if(fert_on_hand == 1){
+    drawOneObjectOnScreen(bagonhandObj, fertonhandMdlMatrix,fertonhandMvpFromLight, "fertTex");
+  }
+  //plant on hand
+  if(plant_on_hand == 1){
+    drawOneObjectOnScreen(pumpkinObj, plantonhandMdlMatrix,plantonhandMvpFromLight, "pumpkinTex");
+  }
 
-  let rotateMatrix = new Matrix4();
+  //tools
+  drawOneObjectOnScreen(toolsObj, toolsMdlMatrix,toolsMvpFromLight, "steelTex");
+  //bag
+  drawOneObjectOnScreen(bagObj, bagMdlMatrix,bagMvpFromLight, "bagTex");
+  //fert
+  drawOneObjectOnScreen(bagObj, fertMdlMatrix,fertMvpFromLight, "fertTex");
+  //can
+  drawOneObjectOnScreen(canObj, canMdlMatrix,canMvpFromLight, "canTex");
+  //well
+  drawOneObjectOnScreen(wellObj, wellMdlMatrix,wellMvpFromLight, "rockTex");
+  //cart
+  drawOneObjectOnScreen(cartObj, cartMdlMatrix,cartMvpFromLight, "woodTex");
+  //pumpkin2
+  if(money >= 1){
+    drawOneObjectOnScreen(pumpkinObj, pumpkinMdlMatrix2,pumpkinMvpFromLight2, "pumpkinTex");
+  }
+  //pumpkin3
+  if(money == 2){
+    drawOneObjectOnScreen(pumpkinObj, pumpkinMdlMatrix3,pumpkinMvpFromLight3, "pumpkinTex");
+  }
+  
+  //plant
+  if(plant_level == 0){
+
+  }else if(plant_level == 1){
+    drawOneObjectOnScreen(leafObj, leafMdlMatrix,leafMvpFromLight, "leafTex");
+  }else if(plant_level == 2){
+    drawOneObjectOnScreen(plantObj, plantMdlMatrix,plantMvpFromLight, "plantTex");
+  }else if(plant_level == 3){
+    drawOneObjectOnScreen(pumpkinObj, pumpkinMdlMatrix,pumpkinMvpFromLight, "pumpkinTex");
+  }
+  
+
+
+  //Q12
+  renderCubeMap(0, 0, 0);
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  // gl.clearColor(0.4,0.4,0.4,1);
+  // gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // gl.enable(gl.DEPTH_TEST);
+
+  rotateMatrix = new Matrix4();
   rotateMatrix.setRotate(angleY, 1, 0, 0);//for mouse rotation
   rotateMatrix.rotate(angleX, 0, 1, 0);//for mouse rotation
-  var viewDir= new Vector3([cameraDirX, cameraDirY, cameraDirZ]);
-  var newViewDir = rotateMatrix.multiplyVector3(viewDir);
+  viewDir= new Vector3([cameraDirX, cameraDirY, cameraDirZ]);
+  newViewDir = rotateMatrix.multiplyVector3(viewDir);
   
-  let vpMatrix = new Matrix4();
-  vpMatrix.setPerspective(70, 1, 1, 100);
+  vpMatrix = new Matrix4();
+  vpMatrix.setPerspective(100, offScreenWidth/offScreenHeight, 0.6, 1000);
   vpMatrix.lookAt(cameraX, cameraY, cameraZ,   
                   cameraX + newViewDir.elements[0], 
                   cameraY + newViewDir.elements[1],
                   cameraZ + newViewDir.elements[2], 
                   0, 1, 0);
 
-  drawRegularObjects(vpMatrix);//ground, mario, sonic
+  // drawRegularObjects(vpMatrix);//ground, mario, sonic
 
   
-  var vpFromCamera = new Matrix4();
-  vpFromCamera.setPerspective(60, 1, 1, 15);
-  var viewMatrixRotationOnly = new Matrix4();
+  vpFromCamera = new Matrix4();
+  vpFromCamera.setPerspective(100, offScreenWidth/offScreenHeight, 0.6, 1000);
+  viewMatrixRotationOnly = new Matrix4();
   viewMatrixRotationOnly.lookAt(cameraX, cameraY, cameraZ, 
                                 cameraX + newViewDir.elements[0], 
                                 cameraY + newViewDir.elements[1], 
@@ -321,11 +878,93 @@ function draw(){
   drawEnvMap();
 
   //the sphere
-  let mdlMatrix = new Matrix4();
-  mdlMatrix.setScale(0.5, 0.5, 0.5);
+  mdlMatrix = new Matrix4();
+  mdlMatrix.setTranslate(0.0, 3, 0.0);
+  mdlMatrix.scale(0.3, 0.3, 0.3);
   drawObjectWithDynamicReflection(sphereObj, mdlMatrix, vpMatrix, 0.95, 0.85, 0.4);
 
 }
+
+function drawOffScreen(obj, mdlMatrix){
+  var mvpFromLight = new Matrix4();
+  //model Matrix (part of the mvp matrix)
+  let modelMatrix = new Matrix4();
+  // modelMatrix.setRotate(angleY, 1, 0, 0);
+  // modelMatrix.rotate(angleX, 0, 1, 0);
+  modelMatrix.multiply(mdlMatrix);
+  //mvp: projection * view * model matrix  
+  mvpFromLight.setPerspective(100, offScreenWidth/offScreenHeight, 0.6, 1000);
+  mvpFromLight.lookAt(lightX, lightY, lightZ, 0,0,0,0,1,0);
+  mvpFromLight.multiply(modelMatrix);
+
+  gl.uniformMatrix4fv(shadowProgram.u_MvpMatrix, false, mvpFromLight.elements);
+
+  for( let i=0; i < obj.length; i ++ ){
+    initAttributeVariable(gl, shadowProgram.a_Position, obj[i].vertexBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, obj[i].numVertices);
+  }
+
+  return mvpFromLight;
+}
+
+//obj: the object components
+//mdlMatrix: the model matrix without mouse rotation
+//colorR, G, B: object color
+function drawOneObjectOnScreen(obj, mdlMatrix, mvpFromLight,texture_key){
+  var mvpFromCamera = new Matrix4();
+  //model Matrix (part of the mvp matrix)
+  let modelMatrix = new Matrix4();
+  // modelMatrix.setRotate(angleY, 1, 0, 0);//for mouse rotation
+  // modelMatrix.rotate(angleX, 0, 1, 0);//for mouse rotation
+  modelMatrix.multiply(mdlMatrix);
+  //mvp: projection * view * model matrix  
+  mvpFromCamera.setPerspective(100, offScreenWidth/offScreenHeight, 0.6, 1000);
+  let rotateMatrix = new Matrix4();
+  rotateMatrix.setRotate(angleY, 1, 0, 0);//for mouse rotation
+  rotateMatrix.rotate(angleX, 0, 1, 0);//for mouse rotation
+  var viewDir= new Vector3([cameraDirX, cameraDirY, cameraDirZ]);
+  var newViewDir = rotateMatrix.multiplyVector3(viewDir);
+  mvpFromCamera.lookAt(cameraX, cameraY, cameraZ, 
+                        cameraX + newViewDir.elements[0], 
+                        cameraY + newViewDir.elements[1], 
+                        cameraZ + newViewDir.elements[2], 
+                        0, 1, 0);
+  mvpFromCamera.multiply(modelMatrix);
+
+  //normal matrix
+  let normalMatrix = new Matrix4();
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
+
+  gl.uniform3f(program.u_LightPosition, lightX, lightY, lightZ);
+  gl.uniform3f(program.u_ViewPosition, cameraX, cameraY, cameraZ);
+  gl.uniform1f(program.u_Ka, 0.2);
+  gl.uniform1f(program.u_Kd, 0.7);
+  gl.uniform1f(program.u_Ks, 1.0);
+  gl.uniform1f(program.u_shininess, 10.0);
+  gl.uniform1i(program.u_ShadowMap, 0);
+  // gl.uniform3f(program.u_Color, colorR, colorG, colorB);
+
+  gl.uniformMatrix4fv(program.u_MvpMatrix, false, mvpFromCamera.elements);
+  gl.uniformMatrix4fv(program.u_modelMatrix, false, modelMatrix.elements);
+  gl.uniformMatrix4fv(program.u_normalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(program.u_MvpMatrixOfLight, false, mvpFromLight.elements);
+
+  gl.activeTexture(gl.TEXTURE0);   
+  gl.bindTexture(gl.TEXTURE_2D, fbo.texture); 
+
+  gl.activeTexture(gl.TEXTURE1); 
+  gl.bindTexture(gl.TEXTURE_2D,textures[texture_key]);
+  gl.uniform1i(program.u_Sampler0,1);   
+
+  for( let i=0; i < obj.length; i ++ ){
+    initAttributeVariable(gl, program.a_Position, obj[i].vertexBuffer);
+    initAttributeVariable(gl, program.a_TexCoord, obj[i].texCoordBuffer);
+    initAttributeVariable(gl, program.a_Normal, obj[i].normalBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, obj[i].numVertices);
+  }
+}
+
 
 function drawEnvMap(){
   //quad
@@ -343,18 +982,147 @@ function drawEnvMap(){
 function drawRegularObjects(vpMatrix){
   let mdlMatrix = new Matrix4();
 
-  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
-  mdlMatrix.translate(-2.0, -0.5, 2.0);
-  mdlMatrix.scale(0.05, 0.05,0.05);
-  drawOneRegularObject(sonicObj, mdlMatrix, vpMatrix, 0.4, 1.0, 0.4);
+  //cube
+  mdlMatrix.setTranslate(0.0, -3.0, 0.0);
+  mdlMatrix.scale(20, 0.2, 20);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"fieldTex");
 
+  //soil
+  mdlMatrix.setTranslate(-5.0, 0.2-3, -5.0);
+  mdlMatrix.scale(3, 0.1, 3);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"soilTex");
+  //soil2
+  mdlMatrix.setTranslate(-13.0, 0.2-3, -5.0);
+  mdlMatrix.scale(3, 0.1, 3);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"soilTex");
+  //soil3
+  mdlMatrix.setTranslate(-5.0, 0.2-3, -13.0);
+  mdlMatrix.scale(3, 0.1, 3);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"soilTex");
+  //soil4
+  mdlMatrix.setTranslate(-13.0, 0.2-3, -13.0);
+  mdlMatrix.scale(3, 0.1, 3);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"soilTex");
+
+  //road
+  mdlMatrix.setTranslate(0.0, 0.11-3, 16.0);
+  mdlMatrix.scale(20, 0.1, 4);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"rockTex");
+  //road
+  mdlMatrix.setTranslate(0.0, 0.11-3, 8.0);
+  mdlMatrix.scale(2.5, 0.1, 4);
+  drawOneRegularObject(cubeObj, mdlMatrix, vpMatrix,"rockTex");
+
+  //mario
   mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
-  mdlMatrix.translate(2.5, -0.5, 1.5);
-  mdlMatrix.scale(0.02, 0.02,0.02);
-  drawOneRegularObject(marioObj, mdlMatrix, vpMatrix, 1.0, 0.4, 0.4);
+  mdlMatrix.translate(4, 2.4-3, -7.5);
+  mdlMatrix.scale(1.8, 1.5, 1.8);
+  drawOneRegularObject(farmerObj, mdlMatrix, vpMatrix,"woodTex");
+
+  //sonic
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(0.0, 1.7-3, -7.5);
+  mdlMatrix.scale(2.0, 1.0,2.0);
+  drawOneRegularObject(farmerObj, mdlMatrix, vpMatrix,"trackTex");
+
+  //garage
+  mdlMatrix.setTranslate(12.0, -3, -7.0);
+  mdlMatrix.rotate(rotateAngle-90, 0, 1, 0);
+  mdlMatrix.scale(1.2, 0.9,1.2);
+  drawOneRegularObject(garageObj, mdlMatrix, vpMatrix,"woodTex");
+
+  //farmer
+  if(lookmode == 1){
+    mdlMatrix.setTranslate(cameraX, cameraY-3, cameraZ);
+  }else{
+    mdlMatrix.setTranslate(cameraX, cameraY-6, cameraZ);
+  }
+  mdlMatrix.rotate(180, 0, 1, 0);
+  mdlMatrix.rotate(angleX, 0, 1, 0);//for mouse rotation
+  mdlMatrix.scale(1.8, 1.2, 1.8);
+  drawOneRegularObject(farmerObj, mdlMatrix, vpMatrix,"woodTex");
+
+  //can on hand
+  if(can_on_hand==1){
+    mdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    mdlMatrix.translate(0.4, -0.5-3, -1.0);
+    mdlMatrix.rotate(-90, 0, 1, 0);
+    mdlMatrix.scale(0.0015, 0.001,0.0015);
+    drawOneRegularObject(canObj, mdlMatrix, vpMatrix,"canTex");
+  }
+  //seed on hand
+  if(seed_on_hand==1){
+    mdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    mdlMatrix.translate(0.2, -0.5-3, -0.8);
+    mdlMatrix.rotate(-90, 0, 1, 0);
+    mdlMatrix.rotate(-90, 1, 0, 0);
+    mdlMatrix.scale(0.02, 0.02,0.02);
+    drawOneRegularObject(bagonhandObj, mdlMatrix, vpMatrix,"bagTex");
+  }
+  //fert on hand
+  if(fert_on_hand==1){
+    mdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    mdlMatrix.translate(0.2, -0.5-3, -0.8);
+    mdlMatrix.rotate(-90, 0, 1, 0);
+    mdlMatrix.rotate(-90, 1, 0, 0);
+    mdlMatrix.scale(0.02, 0.02,0.02);
+    drawOneRegularObject(bagonhandObj, mdlMatrix, vpMatrix,"fertTex");
+  }
+  //plant on hand
+  if(plant_on_hand==1){
+    mdlMatrix.setTranslate(cameraX, cameraY, cameraZ);
+    mdlMatrix.translate(0.45, -0.8-3, -1.0);
+    mdlMatrix.rotate(0, 0, 1, 0);
+    mdlMatrix.scale(0.15, 0.15, 0.15);
+    drawOneRegularObject(pumpkinObj, mdlMatrix, vpMatrix,"pumpkinTex");
+  }
+
+  //tools
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(13, 0.0-3, -7);
+  mdlMatrix.scale(0.2, 0.2,0.2);
+  drawOneRegularObject(toolsObj, mdlMatrix, vpMatrix,"steelTex");
+  
+  //bag
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(4.0, 0.3-3, -6);
+  mdlMatrix.scale(1, 1,1);
+  drawOneRegularObject(bagObj, mdlMatrix, vpMatrix,"bagTex");
+
+  //fertilizer
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(0.0, 0.3-3, -6);
+  mdlMatrix.scale(1, 1,1);
+  drawOneRegularObject(bagObj, mdlMatrix, vpMatrix,"fertTex");
+
+  //can
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(15, 0.5-3, -5);
+  mdlMatrix.scale(0.0015, 0.001,0.0015);
+  drawOneRegularObject(canObj, mdlMatrix, vpMatrix,"canTex");
+
+  //well
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(-6, 0.3-3, 6);
+  mdlMatrix.scale(1, 1,1);
+  drawOneRegularObject(wellObj, mdlMatrix, vpMatrix,"rockTex");
+
+  //cart
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(8, 1.1-3, 10);
+  mdlMatrix.rotate(0, 0, 1, 0);
+  mdlMatrix.rotate(-15, 1, 0, 0);
+  mdlMatrix.scale(0.03, 0.03,0.03);
+  drawOneRegularObject(cartObj, mdlMatrix, vpMatrix,"woodTex");
+
+  //pumpkin
+  mdlMatrix.setRotate(rotateAngle, 0, 1, 0);
+  mdlMatrix.translate(-5.0, 0.3-3, -5);
+  mdlMatrix.scale(0.2, 0.2, 0.2);
+  drawOneRegularObject(pumpkinObj, mdlMatrix, vpMatrix,"pumpkinTex");
 }
 
-function drawOneRegularObject(obj, modelMatrix, vpMatrix, colorR, colorG, colorB){
+function drawOneRegularObject(obj, modelMatrix, vpMatrix,texture_key){
   gl.useProgram(program);
   let mvpMatrix = new Matrix4();
   let normalMatrix = new Matrix4();
@@ -371,11 +1139,17 @@ function drawOneRegularObject(obj, modelMatrix, vpMatrix, colorR, colorG, colorB
   gl.uniform1f(program.u_Kd, 0.7);
   gl.uniform1f(program.u_Ks, 1.0);
   gl.uniform1f(program.u_shininess, 10.0);
-  gl.uniform3f(program.u_Color, colorR, colorG, colorB);
+  gl.uniform1i(program.u_ShadowMap, 0);
+  // gl.uniform3f(program.u_Color, colorR, colorG, colorB);
 
   gl.uniformMatrix4fv(program.u_MvpMatrix, false, mvpMatrix.elements);
   gl.uniformMatrix4fv(program.u_modelMatrix, false, modelMatrix.elements);
   gl.uniformMatrix4fv(program.u_normalMatrix, false, normalMatrix.elements);
+  // gl.uniformMatrix4fv(program.u_MvpMatrixOfLight, false, mvpFromLight.elements);
+
+  gl.activeTexture(gl.TEXTURE1); 
+  gl.bindTexture(gl.TEXTURE_2D,textures[texture_key]);
+  gl.uniform1i(program.u_Sampler0,1);  
 
   for( let i=0; i < obj.length; i ++ ){
     initAttributeVariable(gl, program.a_Position, obj[i].vertexBuffer);
@@ -403,8 +1177,12 @@ function drawObjectWithDynamicReflection(obj, modelMatrix, vpMatrix, colorR, col
   gl.uniformMatrix4fv(programTextureOnCube.u_normalMatrix, false, normalMatrix.elements);
 
   gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_CUBE_MAP, fbo.texture);
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, fbo2.texture);
   gl.uniform1i(programTextureOnCube.u_envCubeMap, 0);
+
+  // gl.activeTexture(gl.TEXTURE1); 
+  // gl.bindTexture(gl.TEXTURE_2D,textures[texture_key]);
+  // gl.uniform1i(program.u_Sampler0,1);  
 
   for( let i=0; i < obj.length; i ++ ){
     initAttributeVariable(gl, programTextureOnCube.a_Position, obj[i].vertexBuffer);
@@ -428,6 +1206,7 @@ async function loadOBJtoCreateVBO( objFile ){
   }
   return objComponents;
 }
+
 
 function parseOBJ(text) {
   // because indices are base 1 let's just fill in the 0th data
@@ -618,13 +1397,111 @@ function keydown(ev){
 
   if(ev.key == 'w'){ 
       cameraX += (newViewDir.elements[0] * 0.1);
-      cameraY += (newViewDir.elements[1] * 0.1);
+      // cameraY += (newViewDir.elements[1] * 0.1);
       cameraZ += (newViewDir.elements[2] * 0.1);
   }
   else if(ev.key == 's'){ 
     cameraX -= (newViewDir.elements[0] * 0.1);
-    cameraY -= (newViewDir.elements[1] * 0.1);
+    // cameraY -= (newViewDir.elements[1] * 0.1);
     cameraZ -= (newViewDir.elements[2] * 0.1);
+  }
+  else if(ev.key == 'a'){ 
+    cameraX += (newViewDir.elements[2] * 0.1);
+    // cameraY -= (newViewDir.elements[1] * 0.1);
+    cameraZ -= (newViewDir.elements[0] * 0.1);
+  }
+  else if(ev.key == 'd'){ 
+    cameraX -= (newViewDir.elements[2] * 0.1);
+    // cameraY -= (newViewDir.elements[1] * 0.1);
+    cameraZ += (newViewDir.elements[0] * 0.1);
+  }
+  else if(ev.key == 'z' && lookmode == 1){ 
+    lookmode = 3;
+    cameraX += (newViewDir.elements[0] * 1);
+    cameraY += 3;
+    cameraZ += (newViewDir.elements[2] * 1);
+    cameraDirX = 0;
+    cameraDirY = -3;
+    cameraDirZ = -4;
+  }
+  else if(ev.key == 'x' && lookmode == 3){
+    lookmode = 1;
+    cameraX -= (newViewDir.elements[0] * 1);
+    cameraY -= 3;
+    cameraZ -= (newViewDir.elements[2] * 1);
+    cameraDirX = 0;
+    cameraDirY = 0;
+    cameraDirZ = -1;
+  }
+  else if(ev.key == 'g'){
+    if(distance_can < 1.5){
+      can_on_hand = 0;
+      seed_on_hand = 0;
+      fert_on_hand = 0;
+      plant_on_hand = 0;
+
+      can_on_hand = 1;
+    }else if(distance_seed < 1.5){
+      can_on_hand = 0;
+      seed_on_hand = 0;
+      fert_on_hand = 0;
+      plant_on_hand = 0;
+
+      seed_on_hand = 1;
+    }else if(distance_fert < 1.5){
+      can_on_hand = 0;
+      seed_on_hand = 0;
+      fert_on_hand = 0;
+      plant_on_hand = 0;
+
+      fert_on_hand = 1;
+    }else if(distance_plant < 1.5 && plant_level == 3){
+      can_on_hand = 0;
+      seed_on_hand = 0;
+      fert_on_hand = 0;
+      plant_on_hand = 0;
+
+      plant_on_hand = 1;
+      plant_level = 0;
+    }
+  }
+  else if(ev.key == 'h'){
+    if(distance_can < 1.5){
+      can_on_hand = 0;
+    }else if(distance_seed < 1.5){
+      seed_on_hand = 0;
+    }else if(distance_fert < 1.5){
+      fert_on_hand = 0;
+    }else if(distance_cart < 3 && plant_on_hand == 1){
+      plant_on_hand = 0;
+      money ++;
+    }
+  }
+  else if(ev.key == 'e'){
+    if(distance_plant < 1.5 && seed_on_hand == 1 && plant_level == 0){
+      seed_on_hand = 0;
+      plant_level = 1;
+    }
+    if(distance_well < 1.5 && can_on_hand == 1){
+      water_filled = 1;
+    }
+    if(distance_plant < 1.5 && can_on_hand == 1 && water_filled == 1 && plant_level == 1){
+      water_filled = 0;
+      plant_level = 2;
+    }
+    if(distance_plant < 1.5 && fert_on_hand == 1 && plant_level == 2){
+      fert_on_hand = 0;
+      plant_level = 3;
+    }
+  }
+  else if(ev.key == 'l'){
+    plant_level ++;
+    if(plant_level == 4){
+      plant_level = 0;
+    }
+  }
+  else if(ev.key == 'q' && money == 2){
+    end = 1;
   }
   draw();
 }
@@ -683,12 +1560,12 @@ function renderCubeMap(camX, camY, camZ)
   ];
 
   gl.useProgram(program);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo2);
   gl.viewport(0, 0, offScreenWidth, offScreenHeight);
   gl.clearColor(0.4, 0.4, 0.4,1);
   for (var side = 0; side < 6;side++){
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, 
-                            gl.TEXTURE_CUBE_MAP_POSITIVE_X+side, fbo.texture, 0);
+                            gl.TEXTURE_CUBE_MAP_POSITIVE_X+side, fbo2.texture, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     let vpMatrix = new Matrix4();
@@ -758,4 +1635,47 @@ function initCubeTexture(posXName, negXName, posYName, negYName,
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
 
     return texture;
+}
+
+function initFrameBuffer(gl){
+  //create and set up a texture object as the color buffer
+  var texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, offScreenWidth, offScreenHeight,
+                  0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  
+
+  //create and setup a render buffer as the depth buffer
+  var depthBuffer = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depthBuffer);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 
+                          offScreenWidth, offScreenHeight);
+
+  //create and setup framebuffer: linke the color and depth buffer to it
+  var frameBuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, 
+                            gl.TEXTURE_2D, texture, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, 
+                              gl.RENDERBUFFER, depthBuffer);
+  frameBuffer.texture = texture;
+  return frameBuffer;
+}
+
+function initTexture(gl, img, texKey){
+  gl.useProgram(program);
+  var tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+  // Set the parameters so we can render any size image.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  // Upload the image into the texture.
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+
+  textures[texKey] = tex;
+
+  texCount++;
+  if( texCount == numTextures)draw();
 }
